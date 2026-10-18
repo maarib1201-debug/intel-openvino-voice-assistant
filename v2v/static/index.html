@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>v2v — live</title>
+  <style>
+    :root { --bg:#07080c; --ink:#eef2ff; --dim:#8b93a7; --line:#1c2230; --go:#3dffc1; --wait:#7aa2ff; --talk:#ffb020; }
+    * { box-sizing: border-box; }
+    html, body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+      font: 15px/1.45 ui-sans-serif, system-ui, Segoe UI, sans-serif; }
+    body { display:flex; flex-direction:column; min-height:100%; }
+    header { padding:18px 22px 8px; display:flex; justify-content:space-between; align-items:baseline; }
+    header strong { letter-spacing:.08em; font-size:12px; color:var(--dim); text-transform:uppercase; }
+    header span { color:var(--dim); font-size:12px; }
+    main { flex:1; display:grid; place-items:center; padding:12px; }
+    .stage { width:min(720px, 100%); text-align:center; }
+    .orb {
+      width:148px; height:148px; margin:12px auto 22px; border-radius:50%;
+      background: radial-gradient(circle at 35% 30%, #ffffff22, transparent 45%),
+                  radial-gradient(circle at 50% 50%, #1a2438, #07080c);
+      border:1px solid #2a3348; position:relative; transition: box-shadow .2s, transform .2s;
+    }
+    .orb.listen { box-shadow:0 0 0 8px #3dffc118, 0 0 80px #3dffc140; animation:pulse 1.6s ease-in-out infinite; }
+    .orb.think  { box-shadow:0 0 0 8px #7aa2ff22, 0 0 80px #7aa2ff50; animation:spin .9s linear infinite; }
+    .orb.speak  { box-shadow:0 0 0 10px #ffb02022, 0 0 90px #ffb02055; transform:scale(1.04); }
+    .orb.busy   { box-shadow:0 0 0 8px #ff7a7022, 0 0 80px #ff7a7050; }
+    @keyframes pulse { 50% { transform:scale(1.05); } }
+    @keyframes spin { to { filter:hue-rotate(40deg); } }
+    .state { font-size:13px; letter-spacing:.18em; text-transform:uppercase; color:var(--dim); margin-bottom:18px; }
+    .you, .bot { min-height:1.4em; margin:6px 0; }
+    .you { color:#9aa6c3; } .bot { font-size:22px; font-weight:560; }
+    .metrics {
+      display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin:28px 0 10px;
+    }
+    .metrics div {
+      background:#0e121b; border:1px solid var(--line); border-radius:10px; padding:10px 8px;
+    }
+    .metrics b { display:block; font-variant-numeric:tabular-nums; font-size:16px; }
+    .metrics i { font-style:normal; color:var(--dim); font-size:11px; letter-spacing:.06em; text-transform:uppercase; }
+    .row { display:flex; gap:8px; justify-content:center; margin-top:16px; }
+    .speed {
+      margin-top:14px; color:var(--dim); font-size:12px; letter-spacing:.06em;
+      text-transform:uppercase; display:flex; flex-direction:column; align-items:center; gap:6px;
+    }
+    .speed b { color:var(--ink); font-variant-numeric:tabular-nums; font-size:14px; letter-spacing:0; text-transform:none; }
+    .speed input[type=range] { width:min(280px, 80%); accent-color:#3dffc1; }
+    button {
+      background:#121826; color:var(--ink); border:1px solid #2a3348; border-radius:999px;
+      padding:10px 16px; cursor:pointer; font-weight:600;
+    }
+    button:hover { border-color:#3dffc1; }
+    button.hot { background:#3dffc1; color:#04140f; border-color:#3dffc1; }
+    .log { color:var(--dim); font-size:12px; max-height:120px; overflow:auto; text-align:left;
+      background:#0e121b; border:1px solid var(--line); border-radius:10px; padding:10px; margin-top:16px; }
+    .meter { width:min(280px, 80%); height:8px; margin:0 auto 14px; background:#121826; border-radius:99px; overflow:hidden; }
+    .meter > i { display:block; height:100%; width:0; background:#3dffc1; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>parakeet · tiny llm · pocket tts</strong>
+    <span id="link">connecting…</span>
+  </header>
+  <main>
+    <div class="stage">
+      <div id="orb" class="orb"></div>
+      <div id="state" class="state">idle</div>
+      <div class="meter"><i id="lvl"></i></div>
+      <div id="you" class="you"></div>
+      <div id="bot" class="bot">Tap start, then just talk.</div>
+      <div class="metrics">
+        <div><i>TTFA</i><b id="m-ttfa">—</b></div>
+        <div><i>STT RTF</i><b id="m-stt">—</b></div>
+        <div><i>LLM</i><b id="m-llm">—</b></div>
+        <div><i>TTS RTF</i><b id="m-tts">—</b></div>
+      </div>
+      <div class="row">
+        <button id="go" class="hot">Start listening</button>
+        <button id="cut">Barge in</button>
+        <button id="reset">Reset chat</button>
+      </div>
+      <div class="speed">
+        <label for="speed">Speech speed <b id="speedVal">1.10x</b></label>
+        <input id="speed" type="range" min="0.90" max="1.25" step="0.05" value="1.10"/>
+      </div>
+      <div id="log" class="log"></div>
+    </div>
+  </main>
+<script src="/static/capture_resampler.js"></script>
+<script>
+const IN_SR = 16000, WIN = 512;
+let ws, capCtx, playCtx, capNode, capSrc, capResampler, capPacketAcc = new Float32Array(0), playNext = 0, ttsSr = 24000, playing = [];
+let ttsPlaybackRate = 1.10, userSetSpeed = false, serverTtsSpeed = 1.10;
+let state = "idle", botText = "", micOn = false, listeningEnabled = false, micStream = null;
+let playOpen = false, playLogged = false, playDoneSent = false, playStarted = false;
+let prevSchedEnd = 0, gapSum = 0, gapN = 0, gapMax = 0, starveCount = 0, minQueueDepth = 99;
+let pendingChunks = [];
+let lastTtsRtf = 0.7;
+let activeGeneration = 0;
+let scheduledSources = {};
+let sessionId = null, activeRequestId = null, activeUtteranceId = null;
+let firstPacketTelemetrySent = false;
+let firstSubtitleMono = 0, firstPcmMono = 0;
+let adaptivePrebufferSec = 0.20;
+let startupBufferMs = 0;
+const MAX_SCHEDULE_AHEAD_S = 0.72;
+const MAX_SCHEDULE_CHUNK_TOLERANCE_S = 0.20;
+let playbackGenerations = {};
+let prevChunkLastSample = null;
+let worstBoundaryDelta = 0;
+let worstSmoothedBoundaryDelta = 0;
+let worstBoundaryChunk = -1;
+let pcmChunkIndex = 0;
+let pcmBoundaryCount = 0;
+// Opt-in only: /?diagnostics=1 reports granted settings and capture format,
+// never a device label or identifier.
+const captureDiagnostics = new URLSearchParams(location.search).get("diagnostics") === "1";
+
+const $ = (id) => document.getElementById(id);
+function log(s) {
+  const el = $("log");
+  el.textContent = (new Date()).toISOString().slice(11,23) + "  " + s + "\n" + el.textContent;
+}
+function playbackTelemetry(event, data = {}) {
+  const payload = {
+    type: "playback_telemetry",
+    event,
+    session_id: sessionId,
+    request_id: activeRequestId,
+    utterance_id: activeUtteranceId,
+    generation_id: activeGeneration,
+    client_mono_ms: performance.now(),
+    data,
+  };
+  try {
+    const saved = JSON.parse(localStorage.getItem("v2v_playback_telemetry") || "[]");
+    saved.push(payload);
+    localStorage.setItem("v2v_playback_telemetry", JSON.stringify(saved.slice(-500)));
+  } catch {}
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(payload));
+}
+function captureTelemetry(event, data = {}) {
+  if (!captureDiagnostics) return;
+  playbackTelemetry(event, data);
+}
+function setState(s) {
+  if ((s === "listening" || s === "thinking") && !listeningEnabled) {
+    s = "off";
+  }
+  state = s;
+  $("state").textContent = s === "off" ? "microphone off" : s;
+  $("orb").className = "orb " + (s === "listening" ? "listen" : s === "thinking" ? "think" : s === "speaking" ? "speak" : s === "busy" ? "busy" : "");
+}
+function localBarge() {
+  if (!listeningEnabled) {
+    log("barge ignored listening_enabled=false");
+    return;
+  }
+  cancelPlayback(activeGeneration, "user-button");
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "barge", source: "button" }));
+}
+
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const token = new URLSearchParams(location.search).get("token");
+  const auth = token ? `?token=${encodeURIComponent(token)}` : "";
+  ws = new WebSocket(`${proto}://${location.host}/ws${auth}`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => {
+    $("link").textContent = "live"; log("socket open");
+    // A new server session must not receive fractional state from the old one.
+    if (capResampler) capResampler.reset();
+    capPacketAcc = new Float32Array(0);
+  };
+  ws.onclose = () => { $("link").textContent = "disconnected"; setTimeout(connect, 800); };
+  ws.onerror = () => $("link").textContent = "error";
+  ws.onmessage = (ev) => {
+    if (ev.data instanceof ArrayBuffer) { playPcmPacket(ev.data); return; }
+    const msg = JSON.parse(ev.data);
+    if (msg.session_id) sessionId = msg.session_id;
+    const taggedGeneration = Number(msg.generation_id);
+    const hasGeneration = Number.isFinite(taggedGeneration);
+    if (msg.type === "user" && hasGeneration) {
+      if (taggedGeneration !== activeGeneration) {
+        for (const key of Object.keys(scheduledSources)) {
+          const g = Number(key);
+          if (g !== taggedGeneration && ((scheduledSources[g] || []).length || pendingChunks.some((c) => c.gen === g))) {
+            cancelPlayback(g, "new_user_generation");
+          }
+        }
+        activeGeneration = taggedGeneration;
+        log("new_generation=" + taggedGeneration + " source=user");
+      }
+    } else if (
+      hasGeneration &&
+      ["state", "bot_delta", "bot", "error", "audio_end", "tts_chunk", "tts_rtf", "ttfa", "metrics"].includes(msg.type) &&
+      taggedGeneration !== activeGeneration
+    ) {
+      log(msg.type + "_discarded reason=stale_generation generation_id=" + taggedGeneration + " active=" + activeGeneration);
+      return;
+    }
+    if (msg.type === "busy") {
+      setState("busy");
+      $("bot").textContent = "Assistant is busy — try again in a moment.";
+      log("busy retry_after_ms=" + (msg.retry_after_ms ?? "?") + " reason=" + (msg.reason || ""));
+    }
+    if (msg.type === "state") {
+      if (msg.state === "listening" && !listeningEnabled) {
+        log("automatic resume attempt blocked listening_enabled=false");
+        setState("off");
+      } else {
+        setState(msg.state);
+      }
+    }
+    if (msg.type === "partial") $("you").textContent = "… " + msg.text;
+    if (msg.type === "user") {
+      activeRequestId = msg.request_id || activeRequestId;
+      activeUtteranceId = msg.utterance_id || activeUtteranceId;
+      $("you").textContent = "you · " + msg.text;
+      botText = "";
+      log("utterance_id=" + (msg.utterance_id ?? "?") + " transcript_accepted");
+    }
+    if (msg.type === "bot_delta") {
+      if (!botText) {
+        firstSubtitleMono = performance.now();
+        log("first subtitle");
+        playbackTelemetry("first_subtitle");
+      }
+      botText += msg.text;
+      $("bot").textContent = botText;
+    }
+    if (msg.type === "bot") $("bot").textContent = msg.text;
+    if (msg.type === "audio_start") {
+      activeRequestId = msg.request_id || activeRequestId;
+      activeUtteranceId = msg.utterance_id || activeUtteranceId;
+      ttsSr = msg.sr || ttsSr;
+      if (msg.tts_speed && !userSetSpeed) setSpeed(msg.tts_speed, false);
+      const gid = Number(msg.generation_id);
+      if (Number.isFinite(gid)) {
+        if (gid !== activeGeneration) {
+          // A user event is the only authority that may replace/cancel a
+          // generation. WebSocket ordering means it always arrives first.
+          log("audio_start_discarded reason=no_accepted_user_generation generation_id=" + gid + " active=" + activeGeneration);
+          return;
+        }
+      }
+      resetPlayPipeline(gid);
+      playOpen = true;
+      firstPacketTelemetrySent = false;
+    }
+    if (msg.type === "audio_end") {
+      markTtsComplete(activeGeneration);
+    }
+    if (msg.type === "interrupt") {
+      const oldG = Number(msg.cancelled_generation);
+      const newG = Number(msg.generation_id);
+      if (Number.isFinite(oldG)) cancelPlayback(oldG, msg.reason || "interrupt");
+      else cancelPlayback(activeGeneration, msg.reason || "interrupt");
+      if (Number.isFinite(newG)) {
+        activeGeneration = newG;
+        log("new_generation=" + newG);
+      }
+      if (msg.reason === "confirmed-user-speech") {
+        log("barge audio stop server_candidate_to_cancel_ms=" + (msg.barge_cancel_latency_ms ?? "?") +
+            " utterance_preserved=" + Boolean(msg.barge_utterance_preserved));
+      }
+    }
+    if (msg.type === "tts_chunk") log("tts chunk " + msg.i + " q=" + msg.qlen + " " + (msg.text || "").slice(0, 80));
+    if (msg.type === "tts_rtf") {
+      lastTtsRtf = Number(msg.rtf) || lastTtsRtf;
+      $("m-tts").textContent = lastTtsRtf.toFixed(2);
+      const rate = ttsPlaybackRate;
+      const sustain = lastTtsRtf * rate;
+      log("tts_generation_rtf=" + lastTtsRtf.toFixed(2) + " playback_rate=" + rate.toFixed(2) +
+          (sustain > 0.95 ? " WARN cannot_sustain_speed" : " ok"));
+      if (!userSetSpeed && sustain > 0.98) {
+        const safe = Math.max(1.00, Math.min(serverTtsSpeed, Math.floor((0.92 / lastTtsRtf) * 20) / 20));
+        if (safe < ttsPlaybackRate) {
+          setSpeed(safe, false);
+          log("adaptive playback_rate=" + safe.toFixed(2) + " reason=cannot_sustain_speed");
+        }
+      }
+    }
+    if (msg.type === "ttfa") $("m-ttfa").textContent = msg.s.toFixed(2) + "s";
+    if (msg.type === "metrics") {
+      $("m-ttfa").textContent = (msg.ttfa_s ?? 0).toFixed(2) + "s";
+      $("m-stt").textContent = (msg.stt_rtf ?? 0).toFixed(2);
+      $("m-llm").textContent = (msg.llm_s ?? 0).toFixed(2) + "s";
+      $("m-tts").textContent = (msg.tts_rtf ?? 0).toFixed(2);
+      log(`ttfa ${msg.ttfa_s}  stt_rtf ${msg.stt_rtf}  llm ${msg.llm_s}s  tts_rtf ${msg.tts_rtf}`);
+    }
+    if (msg.ready) {
+      ttsSr = msg.tts_sr || ttsSr;
+      if (msg.tts_speed) {
+        serverTtsSpeed = msg.tts_speed;
+        if (!userSetSpeed) setSpeed(msg.tts_speed, false);
+      }
+      log("asr " + (msg.asr_device || msg.asr) + "  llm " + msg.llm_backend + "  tts_speed " + ttsPlaybackRate);
+    }
+    if (msg.type === "error") log(msg.text);
+  };
+}
+
+async function startMic() {
+  if (listeningEnabled) return;
+  capCtx = capCtx || new AudioContext({ sampleRate: 16000 });
+  playCtx = playCtx || new AudioContext({ sampleRate: 24000 });
+  if (capCtx.state === "suspended") await capCtx.resume();
+  if (playCtx.state === "suspended") await playCtx.resume();
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      sampleRate: 16000,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    }
+  });
+  micStream = stream;
+  capSrc = capCtx.createMediaStreamSource(stream);
+  capResampler = new V2VStreamingResampler(capCtx.sampleRate, IN_SR);
+  const workletName = "cap" + Date.now();
+  const worklet = `
+    class Cap extends AudioWorkletProcessor {
+      process(inputs) {
+        const input = inputs[0];
+        const ch = input && input[0];
+        if (ch && ch.length) this.port.postMessage({ pcm: ch, channels: input.length });
+        return true;
+      }
+    }
+    registerProcessor("${workletName}", Cap);
+  `;
+  await capCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([worklet], { type: "application/javascript" })));
+  capNode = new AudioWorkletNode(capCtx, workletName);
+  capPacketAcc = new Float32Array(0);
+  let captureFormatLogged = false;
+  capNode.port.onmessage = (e) => {
+    if (!listeningEnabled) return;
+    if (!ws || ws.readyState !== 1) return;
+    const packet = e.data;
+    if (!captureFormatLogged) {
+      captureFormatLogged = true;
+      captureTelemetry("mic_capture_format", {
+        audio_context_sample_rate: capCtx.sampleRate,
+        worklet_channels: packet.channels || 1,
+        worklet_frame_samples: packet.pcm.length,
+        pcm_format: "f32",
+        output_sample_rate: IN_SR,
+        downsample_required: capCtx.sampleRate !== IN_SR,
+      });
+    }
+    const ds = capResampler.process(packet.pcm);
+    let rms = 0;
+    for (let i = 0; i < ds.length; i++) rms += ds[i] * ds[i];
+    rms = Math.sqrt(rms / Math.max(1, ds.length));
+    $("lvl").style.width = Math.min(100, rms * 400) + "%";
+    sendCaptureSamples(ds);
+  };
+  capSrc.connect(capNode);
+  const mute = capCtx.createGain();
+  mute.gain.value = 0;
+  capNode.connect(mute);
+  mute.connect(capCtx.destination);
+  listeningEnabled = true;
+  micOn = true;
+  setState("listening");
+  $("go").textContent = "Stop listening";
+  $("go").classList.remove("hot");
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "listen", enabled: true, reason: "user-start" }));
+  const tr = stream.getAudioTracks()[0];
+  const st = tr.getSettings ? tr.getSettings() : {};
+  const captureSettings = {
+    requested_sample_rate: 16000,
+    requested_channel_count: 1,
+    requested_echo_cancellation: true,
+    requested_noise_suppression: true,
+    requested_auto_gain_control: true,
+    requested_latency: null,
+    actual_sample_rate: st.sampleRate || null,
+    actual_channel_count: st.channelCount || null,
+    actual_echo_cancellation: st.echoCancellation,
+    actual_noise_suppression: st.noiseSuppression,
+    actual_auto_gain_control: st.autoGainControl,
+    actual_latency: st.latency ?? null,
+    audio_context_sample_rate: capCtx.sampleRate,
+    downsample_required: capCtx.sampleRate !== IN_SR,
+  };
+  log("mic_start listening_enabled=true ec=" + st.echoCancellation +
+      " ns=" + st.noiseSuppression + " agc=" + st.autoGainControl +
+      " track_sr=" + (st.sampleRate || "unknown") + " context_sr=" + capCtx.sampleRate +
+      " channels=" + (st.channelCount || "unknown"));
+  captureTelemetry("mic_capture_settings", captureSettings);
+  if (capCtx.sampleRate !== 16000) log("warning: browser ignored 16k capture, resampling");
+}
+
+function sendCaptureSamples(samples, final = false) {
+  if (!samples.length || !ws || ws.readyState !== 1) return;
+  const merged = new Float32Array(capPacketAcc.length + samples.length);
+  merged.set(capPacketAcc); merged.set(samples, capPacketAcc.length);
+  let off = 0;
+  while (off + WIN <= merged.length) {
+    const slice = merged.subarray(off, off + WIN);
+    const i16 = new Int16Array(WIN);
+    for (let i = 0; i < WIN; i++) i16[i] = Math.max(-1, Math.min(1, slice[i])) * 32767;
+    ws.send(i16.buffer); off += WIN;
+  }
+  capPacketAcc = merged.slice(off);
+  if (final && capPacketAcc.length) {
+    const i16 = new Int16Array(capPacketAcc.length);
+    for (let i = 0; i < capPacketAcc.length; i++) i16[i] = Math.max(-1, Math.min(1, capPacketAcc[i])) * 32767;
+    ws.send(i16.buffer); capPacketAcc = new Float32Array(0);
+  }
+}
+
+function stopMic(reason) {
+  reason = reason || "user-stop";
+  if (capResampler && capResampler.sourceRate !== IN_SR) sendCaptureSamples(capResampler.flush(), true);
+  listeningEnabled = false;
+  micOn = false;
+  log("mic_stop reason=" + reason + " listening_enabled=false");
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "listen", enabled: false, reason: reason }));
+  if (micStream) {
+    micStream.getTracks().forEach((t) => { try { t.stop(); } catch {} });
+    micStream = null;
+  }
+  try { capSrc && capSrc.disconnect(); } catch {}
+  try { capNode && capNode.disconnect(); } catch {}
+  if (capResampler && captureDiagnostics && capResampler.sourceRate !== IN_SR) {
+    captureTelemetry("mic_capture_resampler_summary", capResampler.diagnostics());
+  }
+  capResampler = null;
+  capPacketAcc = new Float32Array(0);
+  capSrc = null;
+  capNode = null;
+  $("lvl").style.width = "0";
+  setState("off");
+  $("go").textContent = "Start listening";
+  $("go").classList.add("hot");
+}
+
+function setSpeed(v, fromUser) {
+  const n = Math.max(0.9, Math.min(1.25, Number(v) || 1.15));
+  ttsPlaybackRate = n;
+  if (fromUser) userSetSpeed = true;
+  const el = $("speed");
+  const lab = $("speedVal");
+  if (el && Math.abs(Number(el.value) - n) > 0.001) el.value = String(n);
+  if (lab) lab.textContent = n.toFixed(2) + "x";
+  if (fromUser) log("ttsPlaybackRate=" + n.toFixed(2));
+}
+
+function newPlaybackState(gid) {
+  return {
+    generation: gid,
+    ttsComplete: false,
+    ttsCompleteAt: null,
+    lastSource: null,
+    lastSourceScheduled: false,
+    lastSourceEnded: false,
+    completionSent: false,
+    cancelled: false,
+    maxScheduledAheadMs: 0,
+    maxPendingBufferMs: 0,
+  };
+}
+
+function playbackState(gid = activeGeneration) {
+  if (!playbackGenerations[gid]) playbackGenerations[gid] = newPlaybackState(gid);
+  return playbackGenerations[gid];
+}
+
+function prunePlaybackGenerations() {
+  const stale = Object.keys(playbackGenerations).map(Number).filter((gid) => gid !== activeGeneration).sort((a, b) => b - a).slice(8);
+  for (const gid of stale) {
+    if ((scheduledSources[gid] || []).length || pendingChunks.some((chunk) => chunk.gen === gid)) continue;
+    delete playbackGenerations[gid];
+    delete scheduledSources[gid];
+  }
+}
+
+function resetPlayPipeline(gid = activeGeneration) {
+  prevChunkLastSample = null;
+  worstBoundaryDelta = 0;
+  worstSmoothedBoundaryDelta = 0;
+  worstBoundaryChunk = -1;
+  pcmChunkIndex = 0;
+  pcmBoundaryCount = 0;
+  pendingChunks = pendingChunks.filter((c) => c.gen !== gid);
+  scheduledSources[gid] = [];
+  playbackGenerations[gid] = newPlaybackState(gid);
+  playStarted = false;
+  playLogged = false;
+  playDoneSent = false;
+  playNext = 0;
+  prevSchedEnd = 0;
+  gapSum = 0;
+  gapN = 0;
+  gapMax = 0;
+  starveCount = 0;
+  minQueueDepth = 99;
+  firstPacketTelemetrySent = false;
+  firstPcmMono = 0;
+  startupBufferMs = 0;
+}
+
+function currentRate() {
+  return Math.max(0.9, Math.min(1.25, ttsPlaybackRate || 1.10));
+}
+
+function minBufferSec() {
+  const rate = currentRate();
+  let need = adaptivePrebufferSec;
+  if (lastTtsRtf * rate > 0.98) need = Math.max(need, 0.26);
+  return Math.min(0.42, Math.max(0.18, need));
+}
+
+function scheduledAheadSec(gid = activeGeneration) {
+  playCtx = playCtx || new AudioContext({ sampleRate: 24000 });
+  if (gid !== activeGeneration) return 0;
+  return playNext > playCtx.currentTime ? playNext - playCtx.currentTime : 0;
+}
+
+function pendingSec(gid = activeGeneration) {
+  const rate = currentRate();
+  let s = 0;
+  for (const c of pendingChunks) if (c.gen === gid) s += c.natDur / rate;
+  return s;
+}
+
+function scheduledAheadMs(gid = activeGeneration) {
+  return scheduledAheadSec(gid) * 1000;
+}
+
+function pendingBufferMs(gid = activeGeneration) {
+  return pendingSec(gid) * 1000;
+}
+
+function noteBuffers(gid = activeGeneration) {
+  const state = playbackState(gid);
+  const scheduled = scheduledAheadMs(gid);
+  const pending = pendingBufferMs(gid);
+  state.maxScheduledAheadMs = Math.max(state.maxScheduledAheadMs, scheduled);
+  state.maxPendingBufferMs = Math.max(state.maxPendingBufferMs, pending);
+  return { scheduled, pending };
+}
+
+function playPcmPacket(buf) {
+  if (!buf || buf.byteLength < 6) return;
+  const gen = new DataView(buf).getUint32(0, true);
+  if (gen !== activeGeneration) {
+    log("tts_chunk_discarded reason=stale_generation generation_id=" + gen + " active=" + activeGeneration);
+    playbackTelemetry("stale_audio_discarded", { received_generation_id: gen });
+    return;
+  }
+  if (!firstPacketTelemetrySent) {
+    firstPacketTelemetrySent = true;
+    firstPcmMono = performance.now();
+    playbackTelemetry("first_audio_packet_received", { bytes: buf.byteLength });
+  }
+  const pcm = buf.slice(4);
+  const i16 = new Int16Array(pcm);
+  if (!i16.length) return;
+  const f32 = new Float32Array(i16.length);
+  for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
+  pcmChunkIndex += 1;
+
+  const rawFirstSample = f32[0];
+  const lastSample = f32[f32.length - 1];
+
+  if (prevChunkLastSample !== null) {
+    const rawBoundaryDelta = Math.abs(rawFirstSample - prevChunkLastSample);
+    const SMOOTH_SAMPLES = Math.min(48, f32.length);
+
+    // Smooth only the first ~2 ms of each 24 kHz PCM packet toward the
+    // previous packet's final sample. This preserves packet duration and
+    // scheduling while reducing abrupt waveform jumps at packet boundaries.
+    for (let i = 0; i < SMOOTH_SAMPLES; i++) {
+      const t = (i + 1) / SMOOTH_SAMPLES;
+      f32[i] = prevChunkLastSample * (1 - t) + f32[i] * t;
+    }
+
+    const firstSample = f32[0];
+    const boundaryDelta = Math.abs(firstSample - prevChunkLastSample);
+    pcmBoundaryCount += 1;
+
+    if (rawBoundaryDelta > worstBoundaryDelta) {
+      worstBoundaryDelta = rawBoundaryDelta;
+      worstBoundaryChunk = pcmChunkIndex;
+    }
+    worstSmoothedBoundaryDelta = Math.max(worstSmoothedBoundaryDelta, boundaryDelta);
+  }
+
+  prevChunkLastSample = lastSample;
+  pendingChunks.push({ f32, natDur: i16.length / ttsSr, gen });
+  const buffers = noteBuffers(gen);
+  playbackTelemetry("audio_packet_received", {
+    bytes: buf.byteLength,
+    pending_chunks: pendingChunks.filter((c) => c.gen === gen).length,
+    pending_buffer_ms: buffers.pending,
+    scheduled_ahead_ms: buffers.scheduled,
+  });
+  pumpPlayback();
+}
+
+function pumpPlayback() {
+  pendingChunks = pendingChunks.filter((c) => {
+    if (c.gen === activeGeneration) return true;
+    log("tts_chunk_discarded reason=stale_generation generation_id=" + c.gen + " active=" + activeGeneration);
+    return false;
+  });
+  if (!playStarted) {
+    const n = pendingChunks.length;
+    const sec = pendingSec();
+    const need = minBufferSec();
+    const ready = (!playOpen && n > 0) || sec >= need || (n >= 2 && sec >= 0.16);
+    log(
+      "tts_prebuffer n=" + n +
+      " pending_buffer_ms=" + (sec * 1000).toFixed(0) +
+      " need_ms=" + (need * 1000).toFixed(0) +
+      " playback_rate=" + currentRate().toFixed(2) +
+      " tts_generation_rtf=" + lastTtsRtf.toFixed(2) +
+      (ready ? " release=true" : " release=false")
+    );
+    playbackTelemetry("prebuffer", { pending_chunks: n, pending_buffer_ms: sec * 1000, required_ms: need * 1000, playback_rate: currentRate(), ready });
+    if (!ready) return;
+    startupBufferMs = sec * 1000;
+    playStarted = true;
+  }
+  while (pendingChunks.length) {
+    const next = pendingChunks[0];
+    const ahead = scheduledAheadSec();
+    // A single chunk may carry us slightly beyond the target; never schedule
+    // another source once the horizon itself is already full.
+    if (ahead >= MAX_SCHEDULE_AHEAD_S) break;
+    if (ahead > 0 && ahead + next.natDur / currentRate() > MAX_SCHEDULE_AHEAD_S + MAX_SCHEDULE_CHUNK_TOLERANCE_S) break;
+    scheduleChunk(pendingChunks.shift());
+  }
+  markLastSourceIfKnown(activeGeneration);
+}
+
+function scheduleChunk(c) {
+  if (c.gen !== activeGeneration) {
+    log("tts_chunk_discarded reason=stale_generation generation_id=" + c.gen + " active=" + activeGeneration);
+    playbackTelemetry("stale_audio_discarded", { scheduled_generation_id: c.gen });
+    return;
+  }
+  playCtx = playCtx || new AudioContext({ sampleRate: 24000 });
+  const ac = playCtx;
+  const rate = currentRate();
+  const adjDur = c.natDur / rate;
+  const now = ac.currentTime;
+  let start;
+  let gapMs = 0;
+  let starved = false;
+  let chained = 0;
+  const stale = playNext > 0 && now > playNext + 0.5;
+  const isFirst = !playLogged || playNext <= 0 || stale;
+  if (isFirst) {
+    start = now + 0.02;
+    gapMs = 0;
+    starved = false;
+    if (stale) {
+      gapSum = 0;
+      gapN = 0;
+      gapMax = 0;
+      starveCount = 0;
+      minQueueDepth = 99;
+    }
+  } else {
+    chained = playNext;
+    if (now > chained + 0.003) {
+      starved = true;
+      starveCount += 1;
+      gapMs = (now - chained) * 1000;
+      start = now;
+    } else {
+      start = Math.max(now, chained);
+      gapMs = 0;
+    }
+  }
+  playbackTelemetry("audio_source_scheduled", { scheduled_start_s: start, scheduled_end_s: start + adjDur, pending_chunks: pendingChunks.length, playback_rate: rate, gap_ms: gapMs, overlap: now > start + 0.003 });
+  const audioBuf = ac.createBuffer(1, c.f32.length, ttsSr);
+  audioBuf.getChannelData(0).set(c.f32);
+  const src = ac.createBufferSource();
+  src.buffer = audioBuf;
+  src.playbackRate.value = rate;
+  if ("preservesPitch" in src) src.preservesPitch = true;
+  src.connect(ac.destination);
+  src.start(start);
+  const end = start + adjDur;
+  playNext = end;
+  prevSchedEnd = end;
+  if (!scheduledSources[c.gen]) scheduledSources[c.gen] = [];
+  const record = { src, start, end, gen: c.gen, final: false };
+  scheduledSources[c.gen].push(record);
+  playing.push(src);
+  log("generation_id=" + c.gen + " audio_source_scheduled start=" + start.toFixed(3) + " end=" + end.toFixed(3));
+  const qDepth = (scheduledSources[c.gen] || []).length;
+  if (qDepth < minQueueDepth) minQueueDepth = qDepth;
+  if (!isFirst) {
+    gapSum += gapMs;
+    gapN += 1;
+    if (gapMs > gapMax) gapMax = gapMs;
+  }
+  const buffers = noteBuffers(c.gen);
+  log(
+    "tts_chunk_ready chunk_duration=" + c.natDur.toFixed(3) +
+    " playback_rate=" + rate.toFixed(2) +
+    " scheduled_start=" + start.toFixed(3) +
+    " scheduled_end=" + end.toFixed(3) +
+    " scheduled_sources=" + qDepth +
+    " scheduled_ahead_ms=" + buffers.scheduled.toFixed(0) +
+    " pending_buffer_ms=" + buffers.pending.toFixed(0) +
+    " gap_ms=" + (isFirst ? "n/a" : gapMs.toFixed(1)) +
+    " first_chunk=" + isFirst +
+    " queue_starved=" + starved +
+    " tts_generation_rtf=" + lastTtsRtf.toFixed(2)
+  );
+  if (starved) {
+    if (!userSetSpeed && currentRate() > 1.0) {
+      setSpeed(Math.max(1.0, currentRate() - 0.05), false);
+      log("adaptive playback_rate=" + currentRate().toFixed(2) + " reason=queue_starvation");
+    }
+    adaptivePrebufferSec = Math.min(0.32, adaptivePrebufferSec + 0.03);
+    playbackTelemetry("queue_starvation", { gap_ms: gapMs, scheduled_ahead_ms: buffers.scheduled, pending_buffer_ms: buffers.pending });
+  }
+  if (!isFirst && gapMs > 0) playbackTelemetry("inter_chunk_gap", { gap_ms: gapMs, queue_depth: qDepth });
+  if (!isFirst && now > chained + 0.003) playbackTelemetry("audio_overlap_or_late_schedule", { gap_ms: gapMs });
+  if (!playLogged) {
+    playLogged = true;
+    log("playback start speed=" + rate + " prebuffer_ms=" + startupBufferMs.toFixed(0));
+    playbackTelemetry("playback_started_estimate", {
+      scheduled_start_s: start,
+      prebuffer_ms: startupBufferMs,
+      playback_rate: rate,
+      first_subtitle_to_playback_ms: firstSubtitleMono ? performance.now() - firstSubtitleMono + 20 : null,
+      first_pcm_to_playback_ms: firstPcmMono ? performance.now() - firstPcmMono + 20 : null,
+    });
+  }
+  src.onended = () => {
+    playing = playing.filter((s) => s !== src);
+    const list = scheduledSources[c.gen];
+    if (list) scheduledSources[c.gen] = list.filter((x) => x.src !== src);
+    const state = playbackState(c.gen);
+    if (state.cancelled) return;
+    if (record.final || state.lastSource === record) {
+      state.lastSourceEnded = true;
+      log("playback_last_source_ended generation_id=" + c.gen + " audioctx=" + ac.currentTime.toFixed(3));
+      playbackTelemetry("playback_last_source_ended", { audioctx_time: ac.currentTime, last_source_end_audioctx: record.end });
+    }
+    pumpPlayback();
+    maybePlaybackEnd(c.gen);
+  };
+}
+
+function markLastSourceIfKnown(gid) {
+  const state = playbackState(gid);
+  if (!state.ttsComplete || state.lastSourceScheduled || pendingChunks.some((c) => c.gen === gid)) return;
+  const list = scheduledSources[gid] || [];
+  if (!list.length) return;
+  let last = list[0];
+  for (const item of list) if (item.end > last.end) last = item;
+  last.final = true;
+  state.lastSource = last;
+  state.lastSourceScheduled = true;
+  state.lastSourceEndAudioCtx = last.end;
+  log("playback_last_source_scheduled generation_id=" + gid + " end_audioctx=" + last.end.toFixed(3));
+  playbackTelemetry("playback_last_source_scheduled", { last_source_end_audioctx: last.end, ...noteBuffers(gid) });
+}
+
+function markTtsComplete(gid) {
+  const state = playbackState(gid);
+  if (state.cancelled || state.ttsComplete) return;
+  state.ttsComplete = true;
+  state.ttsCompleteAt = performance.now();
+  playOpen = false;
+  const buffers = noteBuffers(gid);
+  log("playback_generation_tts_complete generation_id=" + gid + " pending_buffer_ms=" + buffers.pending.toFixed(0) + " scheduled_ahead_ms=" + buffers.scheduled.toFixed(0));
+  playbackTelemetry("playback_generation_tts_complete", { tts_complete_at: state.ttsCompleteAt, pending_buffer_ms: buffers.pending, scheduled_ahead_ms: buffers.scheduled });
+  pumpPlayback();
+  markLastSourceIfKnown(gid);
+  maybePlaybackEnd(gid);
+}
+
+function cancelPlayback(generationId, reason) {
+  reason = reason || "unspecified";
+  const gid = Number(generationId);
+  const state = playbackState(gid);
+  state.cancelled = true;
+  log("cancel_generation=" + gid + " reason=" + reason);
+  const list = scheduledSources[gid] || [];
+  playbackTelemetry("audio_cancelled", {
+    cancelled_generation_id: gid,
+    reason,
+    scheduled_sources_stopped: list.length,
+    pending_chunks_before_cancel: pendingChunks.filter((c) => c.gen === gid).length,
+  });
+  log("stopping_scheduled_sources count=" + list.length + " reason=" + reason);
+  for (const item of list) {
+    try { item.src.stop(); } catch {}
+    try { item.src.disconnect(); } catch {}
+  }
+  scheduledSources[gid] = [];
+  const before = pendingChunks.length;
+  pendingChunks = pendingChunks.filter((c) => c.gen !== gid);
+  if (before !== pendingChunks.length) {
+    log("tts_chunk_discarded generation=" + gid + " reason=stale_generation pending_cleared=" + (before - pendingChunks.length));
+  }
+  playing = playing.filter((s) => list.every((item) => item.src !== s));
+  if (!Number.isFinite(gid) || gid === activeGeneration) {
+    playOpen = false;
+    playStarted = false;
+    playLogged = false;
+    prevSchedEnd = 0;
+    playCtx = playCtx || new AudioContext({ sampleRate: 24000 });
+    playNext = playCtx.currentTime;
+    log("playback_timeline_reset");
+  }
+}
+
+function maybePlaybackEnd(gid = activeGeneration) {
+  const state = playbackState(gid);
+  const live = (scheduledSources[gid] || []).length;
+  const pending = pendingChunks.some((c) => c.gen === gid);
+  if (state.cancelled || !state.ttsComplete || live || pending || state.completionSent) return;
+  if (state.lastSourceScheduled && !state.lastSourceEnded) return;
+  state.completionSent = true;
+  playDoneSent = true;
+  const avg = gapN ? (gapSum / gapN) : 0;
+  const buffers = noteBuffers(gid);
+  log(
+    "playback end avg_gap_ms=" + avg.toFixed(1) +
+    " max_gap_ms=" + gapMax.toFixed(1) +
+    " min_queue_depth=" + (minQueueDepth === 99 ? 0 : minQueueDepth) +
+    " queue_starvation_count=" + starveCount +
+    " n=" + gapN +
+    " pending_buffer_ms=" + buffers.pending.toFixed(0) +
+    " scheduled_ahead_ms=" + buffers.scheduled.toFixed(0)
+  );
+  log("playback_generation_complete generation_id=" + gid + " reason=last_source_ended=" + state.lastSourceEnded);
+  log(
+    "pcm_boundary_summary generation_id=" + gid +
+    " boundaries=" + pcmBoundaryCount +
+    " max_raw_delta=" + worstBoundaryDelta.toFixed(6) +
+    " max_smoothed_delta=" + worstSmoothedBoundaryDelta.toFixed(6) +
+    " worst_chunk=" + worstBoundaryChunk
+  );
+  playbackTelemetry("playback_generation_complete", {
+    playback_complete_reason: state.lastSourceScheduled ? "last-source-ended" : "no-audio",
+    tts_complete_at: state.ttsCompleteAt,
+    last_source_end_audioctx: state.lastSourceEndAudioCtx || null,
+    actual_last_source_onended_at: performance.now(),
+    max_scheduled_ahead_ms: state.maxScheduledAheadMs,
+    max_pending_buffer_ms: state.maxPendingBufferMs,
+    starvation_count: starveCount,
+    max_gap_ms: gapMax,
+    pcm_boundary_count: pcmBoundaryCount,
+    max_raw_boundary_delta: worstBoundaryDelta,
+    max_smoothed_boundary_delta: worstSmoothedBoundaryDelta,
+    worst_boundary_chunk: worstBoundaryChunk,
+  });
+  playbackTelemetry("playback_summary", {
+    playback_completion_reason: state.lastSourceScheduled ? "last-source-ended" : "no-audio",
+    max_gap_ms: gapMax, starvation_count: starveCount,
+    max_pending_buffer_ms: state.maxPendingBufferMs, max_scheduled_ahead_ms: state.maxScheduledAheadMs,
+    pcm_boundary_count: pcmBoundaryCount, max_raw_boundary_delta: worstBoundaryDelta,
+    max_smoothed_boundary_delta: worstSmoothedBoundaryDelta, worst_boundary_chunk: worstBoundaryChunk,
+  });
+  playbackTelemetry("playback_completed", { average_gap_ms: avg, max_gap_ms: gapMax, queue_starvation_count: starveCount, scheduled_sources: minQueueDepth === 99 ? 0 : minQueueDepth, playback_rate: currentRate() });
+  const previousPrebuffer = adaptivePrebufferSec;
+  if (starveCount >= 2 || gapMax > 30) adaptivePrebufferSec = Math.min(0.42, adaptivePrebufferSec + 0.05);
+  else if (starveCount === 0 && gapMax < 10) adaptivePrebufferSec = Math.max(0.18, adaptivePrebufferSec - 0.02);
+  playbackTelemetry("adaptive_prebuffer_updated", {
+    previous_ms: previousPrebuffer * 1000,
+    target_ms: adaptivePrebufferSec * 1000,
+    starvation_count: starveCount,
+    max_gap_ms: gapMax,
+  });
+  gapSum = 0;
+  gapN = 0;
+  gapMax = 0;
+  starveCount = 0;
+  minQueueDepth = 99;
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "playback_done", generation_id: gid }));
+  prunePlaybackGenerations();
+}
+
+function stopPlayback(resetClock) {
+  cancelPlayback(activeGeneration, resetClock ? "stop-reset-clock" : "stop");
+}
+
+$("go").onclick = () => {
+  if (listeningEnabled) stopMic("user-button");
+  else startMic().catch((e) => log(String(e)));
+};
+$("cut").onclick = () => localBarge();
+$("reset").onclick = () => { ws && ws.send(JSON.stringify({ type: "reset" })); $("you").textContent=""; $("bot").textContent=""; botText=""; };
+$("speed").oninput = () => setSpeed($("speed").value, true);
+connect();
+</script>
+</body>
+</html>

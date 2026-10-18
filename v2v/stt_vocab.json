@@ -1,0 +1,77 @@
+{
+  "terms": [
+    {
+      "canonical": "Kubernetes",
+      "aliases": [
+        "culbinates",
+        "corbell nets",
+        "corbel nets",
+        "kubernets",
+        "kubernetis",
+        "cubernetes"
+      ],
+      "context": [
+        "explain",
+        "simply",
+        "cluster",
+        "container",
+        "pod",
+        "k8s",
+        "orchestrat",
+        "deploy",
+        "docker",
+        "helm",
+        "yaml",
+        "node",
+        "technical"
+      ],
+      "min_ratio": 0.78
+    },
+    {
+      "canonical": "OpenVINO",
+      "aliases": [
+        "openveino",
+        "open vino",
+        "open-vino",
+        "openvno",
+        "open vino"
+      ],
+      "context": [
+        "npu",
+        "gpu",
+        "inference",
+        "intel",
+        "parakeet",
+        "runtime",
+        "model",
+        "accelerator",
+        "cpu",
+        "explain"
+      ],
+      "min_ratio": 0.82
+    },
+    {
+      "canonical": "Qwen",
+      "aliases": [
+        "quinn"
+      ],
+      "context": [
+        "model",
+        "llm",
+        "gpu",
+        "npu",
+        "run",
+        "inference",
+        "chat",
+        "assistant",
+        "openai",
+        "explain",
+        "cactus",
+        "needle",
+        "local",
+        "component"
+      ],
+      "min_ratio": 0.86
+    }
+  ]
+}
