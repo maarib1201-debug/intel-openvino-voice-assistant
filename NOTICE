@@ -1,0 +1,27 @@
+Intel OpenVINO Voice Assistant
+Copyright 2026 Mohammed Omer
+
+The project source and documentation in this repository are licensed under
+the Apache License, Version 2.0. This notice does not relicense any
+third-party software or model assets.
+
+Third-party components and model assets retain their own terms:
+
+* Intel OpenVINO: Apache License 2.0.
+* NVIDIA Parakeet TDT 0.6B v2 base model: Creative Commons Attribution 4.0
+  International (CC BY 4.0). Source: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2
+* FluidInference Parakeet OpenVINO conversion artifacts: CC BY 4.0.
+  Source: https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-ov
+* sherpa-onnx runtime: Apache License 2.0. The separate Parakeet INT8
+  fallback model is CC BY 4.0; see models/README.md.
+* Silero VAD: MIT License.
+* Qwen3.5-0.8B and the ggml-org Q8_0 GGUF conversion: Apache License 2.0.
+* llama.cpp and llama-cpp-python: MIT License.
+* Pocket TTS source code: MIT License. Pocket TTS model weights and the
+  default Alba MacKenna voice and embedding are CC BY 4.0. Voice-cloning
+  access conditions and use restrictions apply if that optional model path
+  is used; see models/README.md.
+
+No third-party model weights are included in this repository. Model assets
+are obtained from their upstream publishers and remain under their own terms.
+The dependency license inventory is in DEPENDENCY-LICENSES.md.

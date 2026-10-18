@@ -16,6 +16,13 @@ flowchart LR
 
 The FastAPI service serves the browser UI and WebSocket endpoint. Calculator and time tools run locally; weather uses Open-Meteo. Optional local knowledge is indexed from `.txt`, `.md`, and `.json` files. Needle retrieval is optional and requires its separately installed runtime.
 
+| Stage | Runtime | Target |
+| --- | --- | --- |
+| Voice activity detection | sherpa-onnx / Silero | CPU |
+| Speech recognition | OpenVINO Parakeet TDT | Encoder on NPU; frontend, decoder, and joint on CPU |
+| Language model | llama.cpp with Qwen3.5-0.8B GGUF | Arc GPU through Vulkan, or CPU fallback |
+| Speech generation | Pocket TTS | CPU, streamed to the browser |
+
 ## Windows setup
 
 Use 64-bit Windows 11 and Python 3.12. Open PowerShell in this directory:
@@ -30,7 +37,7 @@ Place or export the required model assets under `models/` (model weights are int
 - `silero_vad.onnx`
 - `parakeet-tdt-0.6b-v2-ov/` with the four OpenVINO IR graphs and vocabulary listed below
 - `sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/` for CPU fallback
-- `Qwen3.5-0.8B-Q5_K_M.gguf` for llama.cpp; alternatively, the Transformers fallback downloads `Qwen/Qwen3.5-0.8B`
+- `qwen3.5-0.8b-gguf/Qwen3.5-0.8B-Q8_0.gguf` for llama.cpp (Apache-2.0 model, downloaded from the pinned `ggml-org` conversion); alternatively, the Transformers fallback downloads `Qwen/Qwen3.5-0.8B`
 
 To fetch the published Parakeet OpenVINO graphs, sherpa-onnx CPU fallback, and Silero VAD at pinned upstream revisions, run `.\prepare_models.ps1`. Use `-DryRun` to verify the Hub snapshots without downloading their ~1.9 GB weights. This retrieves existing artifacts; it does not run a conversion. The exact revisions and licenses are recorded in `models/README.md`. The original export scripts and complete exporter environment were not recovered, so regenerating identical split graphs from the NeMo checkpoint is not presently reproducible.
 
@@ -46,8 +53,18 @@ Set model locations without editing source code:
 
 ```powershell
 $env:V2V_MODEL_DIR = (Resolve-Path .\models).Path
-$env:V2V_QWEN_GGUF = (Resolve-Path .\models\Qwen3.5-0.8B-Q5_K_M.gguf).Path
+$env:V2V_QWEN_GGUF = (Resolve-Path .\models\qwen3.5-0.8b-gguf\Qwen3.5-0.8B-Q8_0.gguf).Path
 ```
+
+Download the documented GGUF from ggml-org's Qwen3.5 conversion, pinned to the verified repository revision:
+
+```powershell
+& .\.venv\Scripts\python.exe -c "from huggingface_hub.cli.hf import main; main()" download ggml-org/Qwen3.5-0.8B-GGUF `
+  --revision 8fea620810c4afa23dd6443f999a48574c1611a3 `
+  --local-dir .\models\qwen3.5-0.8b-gguf Qwen3.5-0.8B-Q8_0.gguf
+```
+
+The model is based on the official `Qwen/Qwen3.5-0.8B` checkpoint. The GGUF repository declares Apache-2.0 and identifies the source checkpoint. The historical Q5_K_M file used in the saved benchmarks has unknown publisher and conversion provenance; it is not needed for this setup and should not be redistributed as part of this project.
 
 For LAN use, pass `--host 0.0.0.0 --allow-lan` and set a strong `V2V_AUTH_TOKEN` plus exact `V2V_ALLOWED_ORIGINS`; the server rejects an open wildcard origin for non-loopback binds. Keep TLS and network access behind an authenticated reverse proxy.
 
@@ -73,7 +90,7 @@ OpenVINO compiles a model by reading the IR and calling `compile_model` with a d
 
 ### Qwen / Vulkan
 
-The reproducible Transformers fallback is `Qwen/Qwen3.5-0.8B` pinned to revision `2fc06364715b967f1860aea9cf38778875588b17` (override with `V2V_QWEN_REVISION`). The historical llama.cpp run used a local `Qwen3.5-0.8B-Q5_K_M.gguf`, but its publisher/revision and conversion recipe were not recovered; do not redistribute that exact quant without verifying its source terms. The runtime tries the configured GGUF through `llama-cpp-python`, verifies native Vulkan startup diagnostics identify Intel Arc 140V and all 25 model layers on Vulkan, then falls back to CPU if permitted. `n_gpu_layers=-1` by itself is not treated as proof of GPU use.
+The reproducible Transformers fallback is `Qwen/Qwen3.5-0.8B` pinned to revision `2fc06364715b967f1860aea9cf38778875588b17` (override with `V2V_QWEN_REVISION`). The default GGUF is `ggml-org/Qwen3.5-0.8B-GGUF` at revision `8fea620810c4afa23dd6443f999a48574c1611a3`, file `Qwen3.5-0.8B-Q8_0.gguf`; it is a published conversion of that Qwen checkpoint. The historical Q5_K_M file used for benchmark data has unknown publisher/revision and conversion provenance, so the historical results cannot be reproduced bit-for-bit from it. The runtime tries the configured GGUF through `llama-cpp-python`, verifies native Vulkan startup diagnostics identify Intel Arc 140V and full model-layer offload with no CPU-assigned layers, then falls back to CPU if permitted. `n_gpu_layers=-1` by itself is not treated as proof of GPU use.
 
 Vulkan-enabled `llama-cpp-python` is an optional separately built dependency. Install the [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows) and Visual Studio Build Tools with the C++ workload first. `setup.ps1` installs pinned Ninja 1.13.2; CMake must be on `PATH`. From the repository root, build with:
 
@@ -111,7 +128,7 @@ node .\tests\capture_resampler_harness.js
 - If PowerShell blocks a script, allow scripts only in the current shell with `Set-ExecutionPolicy -Scope Process Bypass`, then rerun it.
 - If OpenVINO reports no NPU, check `(.venv) python -c "import openvino as ov; print(ov.Core().available_devices)"`, update the Intel NPU driver, or leave `V2V_ASR_DEVICE=AUTO` for CPU fallback.
 - If the strict GPU launcher exits, run `vulkaninfo --summary`, check that it lists Intel Arc, and rebuild `llama-cpp-python` with the Vulkan SDK/CMake/Ninja instructions above. `run_v2v.bat` allows a CPU fallback.
-- The first Pocket TTS start may download its model and voice files. Keep the machine online for first startup and allow disk space for the Hugging Face cache.
+- The first Pocket TTS start may download its model and predefined voice embedding. Keep the machine online and allow disk space for the Hugging Face cache. Custom voice prompts use the optional gated voice-cloning model; accept its conditions and authenticate with `hf auth login` before enabling that path.
 - If the browser does not capture audio, open the app at `http://127.0.0.1:8088`, grant microphone access to localhost, check the selected input device and OS microphone privacy settings, and verify the browser reports 16 kHz mono capture in its ready state.
 - If replies use CPU unexpectedly, inspect `/health` and the server startup diagnostics. Vulkan is reported as active only when native logs identify Intel Arc and verify model layer placement.
 
@@ -123,6 +140,8 @@ Historical aggregate results and their limitations are in [benchmarks/verified-r
 
 Do not commit model weights, compiled caches, local voice recordings, transcripts, `.venv` folders, or private knowledge documents. The app defaults to redacted transcript logging. `company_knowledge/` is intentionally empty in this repository; populate it only with material you have permission to use.
 
-## Licensing status
+## License and attribution
 
-No project-level license has been assigned. Obtain a maintainer decision before choosing one. The tested Python dependency license inventory is in [DEPENDENCY-LICENSES.md](DEPENDENCY-LICENSES.md); it records package metadata and is not legal advice. The Parakeet graphs and NVIDIA base model are marked CC BY 4.0 and require attribution when redistributing. Qwen3.5-0.8B is Apache 2.0, while the GGUF quantization provenance used in historical runs was not recovered, so verify the specific GGUF publisher's terms. Pocket TTS code is MIT; its official model card and the selected Alba voice samples are CC BY 4.0. No model assets are bundled. Release remains license-incomplete until the project's own code license is selected, exact Qwen/Pocket TTS/voice revisions are recorded, and an attributed source for the historical GGUF or a documented replacement is chosen.
+Original project source and documentation are licensed under [Apache License 2.0](LICENSE). Copyright © 2026 Mohammed Omer. Third-party packages and model assets retain their own licenses; the project license does not cover those works. The dependency inventory and model sources are listed in [DEPENDENCY-LICENSES.md](DEPENDENCY-LICENSES.md), [models/README.md](models/README.md), and [NOTICE](NOTICE).
+
+No model weights are included in this repository. Parakeet and its FluidInference OpenVINO conversion, the sherpa-onnx fallback model, Qwen, and Pocket TTS assets are downloaded separately and carry their upstream terms. The Pocket TTS voice-cloning model is access-gated and its terms restrict certain uses, including unauthorized voice impersonation; the default predefined voice uses the separately licensed without-voice-cloning path. Review the license and access conditions attached to the exact artifact revision before use or redistribution. The historical Q5_K_M benchmark model remains unattributed and is not the recommended setup artifact.

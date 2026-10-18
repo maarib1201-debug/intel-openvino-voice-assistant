@@ -107,7 +107,7 @@ class PocketTTS:
             self.voice = self.model.get_state_for_audio_prompt(cfg.voice)
         except Exception:
             self.voice = self.model.get_state_for_audio_prompt(
-                "hf://kyutai/tts-voices/alba-mackenna/casual.wav"
+                "alba"
             )
         self.voice_s = time.perf_counter() - t1
         self.sr = int(self.model.sample_rate)

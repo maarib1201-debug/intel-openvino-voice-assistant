@@ -1,6 +1,6 @@
-This inventory was generated from the isolated Windows Python 3.12 environment installed by `setup.ps1` using `pip-licenses==5.5.5`. It records each installed distribution's declared license metadata. Review bundled license files and obligations before redistribution.
+This inventory was generated from the isolated Windows Python 3.12 environment installed by `setup.ps1` using `pip-licenses==5.5.5`. It records each installed distribution's declared license metadata. Review bundled license files and obligations before redistribution. The project source and documentation use Apache License 2.0; see `LICENSE` and `NOTICE`. The licenses listed here apply to their respective third-party packages, not to project source.
 
-The `pocket-tts==3.0.2` wheel reports `UNKNOWN` in package metadata; its upstream source repository carries an MIT license. The Pocket TTS model weights and default Alba voice are separately licensed CC BY 4.0. The OpenVINO graphs and sherpa fallback model weights are model artifacts with their own CC BY 4.0 terms; see `models/README.md`. No project license is set here.
+The `pocket-tts==3.0.2` wheel reports `UNKNOWN` in package metadata; its upstream source repository carries an MIT license. The Pocket TTS model weights and default Alba voice are separately licensed CC BY 4.0. The OpenVINO graphs and sherpa fallback model weights are model artifacts with their own CC BY 4.0 terms; see `models/README.md`. No third-party model weights are included in this repository.
 
 Optional backend: `llama-cpp-python==0.3.35` is MIT-licensed. It is not installed by the base setup because Windows Vulkan support requires a matching native build and Vulkan SDK. The Vulkan SDK itself is not bundled and has separate Intel/vendor terms.
 

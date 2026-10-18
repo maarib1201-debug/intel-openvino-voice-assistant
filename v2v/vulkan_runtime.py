@@ -129,7 +129,7 @@ def parse_vulkan_diagnostics(log_text: str) -> VulkanVerification:
         total_layers = int(offloaded_match.group(2))
     else:
         layers_offloaded = len(vulkan_layers)
-        total_layers = 25
+        total_layers = len(vulkan_layers) + len(cpu_layers)
 
     # Verification requires Arc 140V, Vulkan backend, full (or near-full) offload, and no CPU layers
     gpu_verified = bool(

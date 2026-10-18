@@ -33,7 +33,7 @@ def _env_bool(name: str, default: bool) -> bool:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
-QWEN35_GGUF_Q5 = Path(os.environ.get("V2V_QWEN_GGUF", MODELS / "Qwen3.5-0.8B-Q5_K_M.gguf")).expanduser()
+QWEN35_GGUF_DEFAULT = Path(os.environ.get("V2V_QWEN_GGUF", MODELS / "qwen3.5-0.8b-gguf" / "Qwen3.5-0.8B-Q8_0.gguf")).expanduser()
 
 LLM_IDS = {
     # Default: latest small chat model. 350M LFM is too weak for open conversation.
@@ -174,7 +174,7 @@ class Settings:
 
     parakeet_dir: Path = field(default_factory=lambda: MODELS / "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8")
     vad_path: Path = field(default_factory=lambda: MODELS / "silero_vad.onnx")
-    gguf_path: Path = field(default_factory=lambda: QWEN35_GGUF_Q5)
+    gguf_path: Path = field(default_factory=lambda: QWEN35_GGUF_DEFAULT)
 
     @property
     def llm_id(self) -> str:
